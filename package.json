@@ -1,0 +1,14 @@
+{
+    "name": "gpu-mem-extension",
+    "version": "0.1.0",
+    "private": true,
+    "type": "module",
+    "description": "Chrome MV3 extension that profiles WebGL/WebGL2 GPU memory in any page.",
+    "scripts": {
+        "package": "node scripts/package.mjs",
+        "bump:patch": "npm version patch --no-git-tag-version && node scripts/sync-manifest.mjs",
+        "bump:minor": "npm version minor --no-git-tag-version && node scripts/sync-manifest.mjs",
+        "bump:major": "npm version major --no-git-tag-version && node scripts/sync-manifest.mjs",
+        "release": "node scripts/release.mjs"
+    }
+}
