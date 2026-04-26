@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <title>GPU Memory Profiler — Test Page</title>
+    <style>
+        body {
+            font: 14px/1.5 -apple-system, sans-serif;
+            max-width: 980px;
+            margin: 20px auto;
+            padding: 0 16px;
+            color: #222;
+        }
+
+        h1 {
+            margin-bottom: 4px;
+        }
+
+        h2 {
+            margin-top: 28px;
+            border-bottom: 1px solid #ddd;
+            padding-bottom: 4px;
+        }
+
+        .row {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin: 8px 0;
+        }
+
+        button {
+            padding: 6px 12px;
+            border: 1px solid #1a73e8;
+            background: #1a73e8;
+            color: #fff;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+        }
+
+        button.secondary {
+            background: #fff;
+            color: #1a73e8;
+        }
+
+        button:hover {
+            filter: brightness(1.1);
+        }
+
+        canvas {
+            border: 1px solid #888;
+            image-rendering: pixelated;
+            background: #000;
+        }
+
+        pre {
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            overflow: auto;
+            max-height: 420px;
+        }
+
+        .stat {
+            display: inline-block;
+            background: #f3f3f3;
+            padding: 4px 8px;
+            margin-right: 6px;
+            border-radius: 3px;
+            font-family: monospace;
+            font-size: 12px;
+        }
+
+        .ok {
+            color: #137333;
+            font-weight: bold;
+        }
+
+        .warn {
+            color: #b06000;
+            font-weight: bold;
+        }
+
+        .err {
+            color: #c5221f;
+            font-weight: bold;
+        }
+    </style>
+</head>
+
+<body>
+
+    <h1>GPU Memory Profiler — Test Page</h1>
+    <p>
+        Load this page with the <strong>GPU Memory Profiler (WebGL)</strong> extension installed
+        (or paste <code>gpu_memory.js</code> via DevTools snippet at <code>document_start</code>).
+        Then click the buttons to allocate known-size GPU resources and verify
+        <code>gpuMemReport()</code> reports the expected totals.
+    </p>
+
+    <div id="hookStatus"></div>
+
+    <canvas id="gl" width="512" height="512"></canvas>
+
+    <h2>1. Allocate textures</h2>
+    <div class="row">
+        <button onclick="allocTex(1024, 1024, 'RGBA8')">+ 1024² RGBA8 (4 MB)</button>
+        <button onclick="allocTex(2048, 2048, 'RGBA8')">+ 2048² RGBA8 (16 MB)</button>
+        <button onclick="allocTex(1024, 1024, 'RGBA16F')">+ 1024² RGBA16F (8 MB)</button>
+        <button onclick="allocTex(512, 512, 'RGBA8', true)">+ 512² RGBA8 with mips (~1.33 MB)</button>
+        <button onclick="allocTexStorage(2048, 2048, 'RGBA8', 1)">+ texStorage2D 2048² RGBA8 (16 MB)</button>
+    </div>
+
+    <h2>2. Allocate buffers</h2>
+    <div class="row">
+        <button onclick="allocBuf(1*1024*1024, 'STATIC_DRAW')">+ 1 MB STATIC_DRAW</button>
+        <button onclick="allocBuf(4*1024*1024, 'DYNAMIC_DRAW')">+ 4 MB DYNAMIC_DRAW</button>
+        <button onclick="allocBuf(16*1024*1024, 'STREAM_DRAW')">+ 16 MB STREAM_DRAW</button>
+    </div>
+
+    <h2>3. Allocate renderbuffers</h2>
+    <div class="row">
+        <button onclick="allocRb(1024, 1024, 'DEPTH24_STENCIL8')">+ 1024² DEPTH24_STENCIL8 (4 MB)</button>
+        <button onclick="allocRbMS(1024, 1024, 'RGBA8', 4)">+ 1024² RGBA8 4× MSAA (16 MB)</button>
+    </div>
+
+    <h2>4. Build an FBO (texture + depth RB)</h2>
+    <div class="row">
+        <button onclick="allocFbo(2048, 2048)">+ FBO with 2048² color tex + depth RB</button>
+    </div>
+
+    <h2>5. Delete some resources</h2>
+    <div class="row">
+        <button class="secondary" onclick="deleteOne()">Delete one texture</button>
+        <button class="secondary" onclick="deleteAll()">Delete ALL allocated resources</button>
+    </div>
+
+    <h2>Report</h2>
+    <div class="row">
+        <button onclick="runReport(false)">Run gpuMemReport()</button>
+        <button onclick="runReport(true)">Run gpuMemReport({verbose:true, perContext:true})</button>
+        <button class="secondary" onclick="clearOut()">Clear</button>
+    </div>
+    <div id="counters" class="row"></div>
+    <pre id="out">(no report yet — click "Run gpuMemReport()")</pre>
+
+    <h2>Self-check (compares predicted vs reported totals)</h2>
+    <div class="row">
+        <button onclick="selfCheck()">Run self-check</button>
+    </div>
+    <pre id="check">(click "Run self-check" after allocating)</pre>
+
+    <h2>6. Hold-refs / GC release test</h2>
+    <p>
+        When <strong>hold</strong> is ON (default), the profiler pins every tracked GL object so leaked
+        resources stay visible. Turn it OFF to let the GC reclaim resources whose JS refs the app dropped
+        — the profiler entry should disappear after a GC cycle.
+    </p>
+    <div class="row">
+        <label style="display:flex;align-items:center;gap:6px;">
+            <input type="checkbox" id="holdRefsBox" checked> hold refs (leak detector)
+        </label>
+        <button onclick="leakTextures(4, 1024, 1024)">Leak 4× 1024² RGBA8 (drop refs, no delete)</button>
+        <button onclick="forceGC()"
+            title="Best-effort: allocates JS pressure to nudge GC. Open DevTools > Memory > 'Collect garbage' for a guaranteed GC.">Try
+            to force GC</button>
+        <button class="secondary" onclick="leakStatus()">Refresh status</button>
+    </div>
+    <pre id="leakOut">(use this section to verify hold-refs behavior)</pre>
+
+    <script>
+        const canvas = document.getElementById('gl');
+        const gl = canvas.getContext('webgl2') || canvas.getContext('webgl');
+        if (!gl) {
+            document.body.innerHTML = '<h1 class="err">WebGL not supported in this browser.</h1>';
+            throw new Error('no webgl');
+        }
+
+        // ---- Hook status banner --------------------------------------------------
+        (function () {
+            const el = document.getElementById('hookStatus');
+            const hooked = !!(gl.__memHooked && typeof window.gpuMemReport === 'function');
+            if (hooked) {
+                el.innerHTML = '<p class="ok">✓ gpuMemReport detected. Hooks active on this canvas.</p>';
+            } else {
+                el.innerHTML = '<p class="warn">⚠ gpuMemReport not found. Install the extension and reload, ' +
+                    'or in DevTools: <code>installGpuMemHooks(document.getElementById("gl").getContext("webgl2"))</code></p>';
+            }
+        })();
+
+        // ---- Tracking for self-check --------------------------------------------
+        const allocated = {
+            textures: [],   // {tex, w, h, fmt, bytes, mip}
+            buffers: [],   // {buf, size}
+            rbs: [],   // {rb, w, h, fmt, samples, bytes}
+            fbos: []    // {fb, tex, rb}
+        };
+
+        const FMT_BPP = {
+            R8: 1, RG8: 2, RGB8: 3, RGBA8: 4, SRGB8_ALPHA8: 4,
+            R16F: 2, RG16F: 4, RGBA16F: 8,
+            R32F: 4, RGBA32F: 16,
+            DEPTH24_STENCIL8: 4, DEPTH_COMPONENT24: 4, DEPTH_COMPONENT16: 2
+        };
+        function fmtEnum(name) { return gl[name]; }
+        function bppOf(name) { return FMT_BPP[name] || 4; }
+        function mipBytes(base, levels) {
+            if (!levels || levels <= 1) return base;
+            let total = 0, b = base;
+            for (let i = 0; i < levels; i++) { total += b; b = Math.max(1, Math.floor(b / 4)); }
+            return total;
+        }
+
+        // ---- Allocators ----------------------------------------------------------
+        function allocTex(w, h, fmt, withMips) {
+            const t = gl.createTexture();
+            gl.bindTexture(gl.TEXTURE_2D, t);
+            gl.texImage2D(gl.TEXTURE_2D, 0, fmtEnum(fmt), w, h, 0,
+                fmt.includes('RGBA') ? gl.RGBA : gl.RGB,
+                fmt.includes('16F') ? gl.HALF_FLOAT : gl.UNSIGNED_BYTE, null);
+            let levels = 1, bytes = w * h * bppOf(fmt);
+            if (withMips) {
+                gl.generateMipmap(gl.TEXTURE_2D);
+                levels = Math.floor(Math.log2(Math.max(w, h))) + 1;
+                bytes = mipBytes(bytes, levels);
+            }
+            allocated.textures.push({ tex: t, w, h, fmt, bytes, mip: !!withMips });
+            refreshCounters();
+        }
+
+        function allocTexStorage(w, h, fmt, levels) {
+            const t = gl.createTexture();
+            gl.bindTexture(gl.TEXTURE_2D, t);
+            gl.texStorage2D(gl.TEXTURE_2D, levels, fmtEnum(fmt), w, h);
+            const base = w * h * bppOf(fmt);
+            allocated.textures.push({ tex: t, w, h, fmt, bytes: mipBytes(base, levels), mip: levels > 1 });
+            refreshCounters();
+        }
+
+        function allocBuf(size, usage) {
+            const b = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, b);
+            gl.bufferData(gl.ARRAY_BUFFER, size, gl[usage]);
+            allocated.buffers.push({ buf: b, size });
+            refreshCounters();
+        }
+
+        function allocRb(w, h, fmt) {
+            const r = gl.createRenderbuffer();
+            gl.bindRenderbuffer(gl.RENDERBUFFER, r);
+            gl.renderbufferStorage(gl.RENDERBUFFER, fmtEnum(fmt), w, h);
+            const bytes = w * h * bppOf(fmt);
+            allocated.rbs.push({ rb: r, w, h, fmt, samples: 1, bytes });
+            refreshCounters();
+        }
+
+        function allocRbMS(w, h, fmt, samples) {
+            const r = gl.createRenderbuffer();
+            gl.bindRenderbuffer(gl.RENDERBUFFER, r);
+            gl.renderbufferStorageMultisample(gl.RENDERBUFFER, samples, fmtEnum(fmt), w, h);
+            const bytes = w * h * bppOf(fmt) * samples;
+            allocated.rbs.push({ rb: r, w, h, fmt, samples, bytes });
+            refreshCounters();
+        }
+
+        function allocFbo(w, h) {
+            const fb = gl.createFramebuffer();
+            gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+
+            const t = gl.createTexture();
+            gl.bindTexture(gl.TEXTURE_2D, t);
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+            gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t, 0);
+
+            const r = gl.createRenderbuffer();
+            gl.bindRenderbuffer(gl.RENDERBUFFER, r);
+            gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH24_STENCIL8, w, h);
+            gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_STENCIL_ATTACHMENT, gl.RENDERBUFFER, r);
+
+            allocated.textures.push({ tex: t, w, h, fmt: 'RGBA8', bytes: w * h * 4, mip: false });
+            allocated.rbs.push({ rb: r, w, h, fmt: 'DEPTH24_STENCIL8', samples: 1, bytes: w * h * 4 });
+            allocated.fbos.push({ fb, tex: t, rb: r });
+            gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+            refreshCounters();
+        }
+
+        function deleteOne() {
+            const t = allocated.textures.pop();
+            if (t) { gl.deleteTexture(t.tex); }
+            refreshCounters();
+        }
+
+        function deleteAll() {
+            for (const t of allocated.textures) gl.deleteTexture(t.tex);
+            for (const b of allocated.buffers) gl.deleteBuffer(b.buf);
+            for (const r of allocated.rbs) gl.deleteRenderbuffer(r.rb);
+            for (const f of allocated.fbos) gl.deleteFramebuffer(f.fb);
+            allocated.textures.length = 0;
+            allocated.buffers.length = 0;
+            allocated.rbs.length = 0;
+            allocated.fbos.length = 0;
+            refreshCounters();
+        }
+
+        // ---- Counters / Report ---------------------------------------------------
+        function predicted() {
+            const tex = allocated.textures.reduce((s, x) => s + x.bytes, 0);
+            const buf = allocated.buffers.reduce((s, x) => s + x.size, 0);
+            const rb = allocated.rbs.reduce((s, x) => s + x.bytes, 0);
+            return { tex, buf, rb, total: tex + buf + rb };
+        }
+
+        function refreshCounters() {
+            const p = predicted();
+            document.getElementById('counters').innerHTML =
+                `<span class="stat">tex: ${allocated.textures.length} (${(p.tex / 1048576).toFixed(2)} MB)</span>` +
+                `<span class="stat">buf: ${allocated.buffers.length} (${(p.buf / 1048576).toFixed(2)} MB)</span>` +
+                `<span class="stat">rb: ${allocated.rbs.length} (${(p.rb / 1048576).toFixed(2)} MB)</span>` +
+                `<span class="stat">fbo: ${allocated.fbos.length}</span>` +
+                `<span class="stat">predicted total: ${(p.total / 1048576).toFixed(2)} MB</span>`;
+        }
+        refreshCounters();
+
+        function runReport(verbose) {
+            if (typeof window.gpuMemReport !== 'function') {
+                document.getElementById('out').textContent =
+                    'gpuMemReport is not defined. Install the extension and reload this page.';
+                return;
+            }
+            const r = window.gpuMemReport(verbose ? { verbose: true, perContext: true } : {});
+            document.getElementById('out').textContent = JSON.stringify(r, null, 2);
+        }
+
+        function clearOut() {
+            document.getElementById('out').textContent = '(cleared)';
+            document.getElementById('check').textContent = '(cleared)';
+        }
+
+        function selfCheck() {
+            if (typeof window.gpuMemReport !== 'function') {
+                document.getElementById('check').textContent = 'gpuMemReport not available.';
+                return;
+            }
+            const r = window.gpuMemReport({ perContext: true });
+            const p = predicted();
+            const reported = r.summary;
+            const lines = [];
+            function check(label, predBytes, repMB) {
+                const predMB = +(predBytes / 1048576).toFixed(2);
+                const ok = Math.abs(predMB - repMB) < 0.05;
+                lines.push(`${ok ? '✓' : '✗'} ${label}:  predicted ${predMB} MB  vs reported ${repMB} MB  ${ok ? '' : '<-- MISMATCH'}`);
+            }
+            check('textures', p.tex, reported.texturesMB);
+            check('buffers', p.buf, reported.buffersMB);
+            check('renderbuffers', p.rb, reported.renderbuffersMB);
+            check('TOTAL', p.total, reported.totalMB);
+            lines.push('');
+            lines.push(`contexts hooked: ${r.contexts}`);
+            lines.push(`live counts: textures=${r.counts.textures}  buffers=${r.counts.buffers}  rb=${r.counts.renderbuffers}  fbo=${r.counts.framebuffers}`);
+            lines.push(`expected counts: textures=${allocated.textures.length}  buffers=${allocated.buffers.length}  rb=${allocated.rbs.length}  fbo=${allocated.fbos.length}`);
+            document.getElementById('check').textContent = lines.join('\n');
+        }
+
+        // ---- Hold-refs / GC release test ----------------------------------------
+        document.getElementById('holdRefsBox').addEventListener('change', (e) => {
+            const on = e.target.checked;
+            if (typeof window.gpuMemSetHoldRefs !== 'function') {
+                document.getElementById('leakOut').textContent =
+                    'gpuMemSetHoldRefs not available. Install/reload the extension.';
+                e.target.checked = !on;
+                return;
+            }
+            window.gpuMemSetHoldRefs(on);
+            leakStatus();
+        });
+
+        function leakTextures(n, w, h) {
+            // Allocate n textures and INTENTIONALLY do not retain any reference.
+            // We never call deleteTexture either. With holdRefs=ON these stay tracked
+            // (leak detector). With holdRefs=OFF they should become eligible for GC,
+            // and disappear from gpuMemReport once the GC runs.
+            const beforeCount = window.gpuMemReport ? window.gpuMemReport().counts.textures : '?';
+            for (let i = 0; i < n; i++) {
+                const t = gl.createTexture();
+                gl.bindTexture(gl.TEXTURE_2D, t);
+                gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+                // t goes out of scope here — no ref retained anywhere in app code.
+            }
+            gl.bindTexture(gl.TEXTURE_2D, null); // also drop binding-point ref
+            const afterCount = window.gpuMemReport ? window.gpuMemReport().counts.textures : '?';
+            document.getElementById('leakOut').textContent =
+                `Leaked ${n} × ${w}×${h} RGBA8 textures (refs dropped, no deleteTexture called).\n` +
+                `holdRefs = ${typeof window.gpuMemGetHoldRefs === 'function' ? window.gpuMemGetHoldRefs() : '?'}\n` +
+                `texture count: ${beforeCount} -> ${afterCount}\n` +
+                `\n` +
+                `Now click "Try to force GC" (or DevTools > Memory > Collect garbage),\n` +
+                `then "Refresh status". With hold OFF the count should drop back; with hold ON it stays.`;
+        }
+
+        async function forceGC() {
+            // Best-effort: allocate large temporaries and yield, hoping the JS GC kicks in.
+            // Not guaranteed — DevTools "Collect garbage" is the deterministic option.
+            const out = document.getElementById('leakOut');
+            out.textContent = 'Attempting to nudge GC (this is best-effort; DevTools > Memory > Collect garbage is more reliable)...';
+            for (let i = 0; i < 30; i++) {
+                const junk = new Array(1 << 20).fill(0);
+                junk[0] = i;
+                await new Promise(r => setTimeout(r, 16));
+            }
+            await new Promise(r => setTimeout(r, 100));
+            leakStatus();
+        }
+
+        function leakStatus() {
+            if (typeof window.gpuMemReport !== 'function') {
+                document.getElementById('leakOut').textContent = 'gpuMemReport not available.';
+                return;
+            }
+            const r = window.gpuMemReport();
+            const hold = typeof window.gpuMemGetHoldRefs === 'function' ? window.gpuMemGetHoldRefs() : '?';
+            document.getElementById('leakOut').textContent =
+                `holdRefs = ${hold}\n` +
+                `live counts: tex=${r.counts.textures}  buf=${r.counts.buffers}  rb=${r.counts.renderbuffers}  fbo=${r.counts.framebuffers}\n` +
+                `total: ${r.summary.totalMB} MB`;
+        }
+    </script>
+
+</body>
+
+</html>
