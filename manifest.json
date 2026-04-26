@@ -1,0 +1,36 @@
+{
+    "manifest_version": 3,
+    "name": "GPU Memory Profiler (WebGL)",
+    "version": "0.1.0",
+    "description": "Universal WebGL/WebGL2 GPU memory profiler. Hooks getContext at document_start; works on any WebGL Application.",
+    "icons": {
+        "16": "icon.png",
+        "48": "icon.png",
+        "128": "icon.png"
+    },
+    "action": {
+        "default_title": "GPU Memory Profiler — click to open side panel",
+        "default_icon": "icon.png"
+    },
+    "content_scripts": [
+        {
+            "matches": [
+                "<all_urls>"
+            ],
+            "js": [
+                "gpu_memory.js"
+            ],
+            "run_at": "document_start",
+            "world": "MAIN",
+            "all_frames": true,
+            "match_origin_as_fallback": true
+        }
+    ],
+    "permissions": [
+        "activeTab",
+        "scripting"
+    ],
+    "host_permissions": [
+        "<all_urls>"
+    ]
+}
