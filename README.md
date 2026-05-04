@@ -12,7 +12,7 @@ WebGL/WebGL2 app
 
 ## Use
 
-1. Open the target page (Figma, vanihq, your app, etc.). **Reload after install.**
+1. Open the target page (WebGL application). **Reload after install.**
 2. Use the app for a bit so it allocates GPU resources.
 3. Open DevTools console and run `gpuMemReport()` / `gpuMemReport({verbose:true, perContext:true})`.
 
